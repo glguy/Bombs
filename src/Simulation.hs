@@ -20,29 +20,35 @@ startingPower :: Int
 startingPower = 3
 
 startingBombs :: Int
-startingBombs = 1
+startingBombs = 2
 
 type Coord = (Int,Int)
 
 data Bomb = Bomb
   { _bombOwner :: Int
   , _bombPower :: Int
-  , _bombCoord :: Coord
   , _bombTimer :: Float
   , _bombExploded :: Bool
   }
-  deriving (Show)
+  deriving (Show, Read)
 
 data Player = Player
   { _playerCoord :: Coord
   , _playerBombs :: Int
   , _playerPower :: Int
   }
+  deriving (Show, Read)
 
 data World = World
   { _players :: Map Int Player
-  , _bombs   :: [Bomb]
+  , _tiles   :: Map Coord Tile
   }
+  deriving (Show, Read)
+
+data Tile
+  = BombTile Bomb
+  | RockTile
+  deriving (Show, Read)
 
 data Direction = U | D | L | R
   deriving (Read, Show, Eq)
@@ -54,7 +60,7 @@ makeLenses ''World
 startingWorld :: World
 startingWorld = World
   { _players = Map.empty
-  , _bombs   = []
+  , _tiles   = Map.empty
   }
 
 newPlayer :: Coord -> Player
@@ -77,24 +83,26 @@ isValidCoord (x,y) = (even x || even y)
                   && minX <= x
                   && minY <= y
 
-placeBomb :: MonadState World m => Int -> Int -> Coord -> m ()
-placeBomb i p c = bombs %= (b :)
-  where
-  b = Bomb
-        { _bombOwner = i
-        , _bombCoord = c
-        , _bombTimer = bombDuration
-        , _bombPower = p
-        , _bombExploded = False
-        }
+placeBomb :: MonadState World m => Int -> Coord -> m ()
+placeBomb i c =
+  do b <- newBomb i
+     tile c .= Just (BombTile b)
+
+newBomb :: MonadState World m => Int -> m Bomb
+newBomb i =
+  do power <- use $ player i . playerPower
+     return Bomb
+       { _bombOwner     = i
+       , _bombTimer     = bombDuration
+       , _bombPower     = power
+       , _bombExploded  = False
+       }
 
 explodeBomb :: MonadState World m => Coord -> m ()
-explodeBomb c = bombs %= fmap f
-  where f b | b^.bombCoord == c = bombExploded .~ True $ b
-            | otherwise         = b
+explodeBomb c = tile c . mapped . bomb . bombExploded .= True
 
 removeBomb :: MonadState World m => Coord -> m ()
-removeBomb c = bombs %= \bs -> [b | b <- bs, b^.bombCoord /= c]
+removeBomb c = tiles %= Map.delete c
 
 addPlayer :: MonadState World m => Int -> Coord -> m ()
 addPlayer i c = player i .= newPlayer c
@@ -104,9 +112,9 @@ incrementBombs i = player i . playerBombs += 1
 
 decrementBomb :: MonadState World m => Int -> m Bool
 decrementBomb i =
-  do p <- use $ player i
-     let hasBombs = p ^. playerBombs > 0
-     when hasBombs $ player i . playerBombs -= 1
+  do n <- use $ player i . playerBombs
+     let hasBombs = n > 0
+     when hasBombs $ player i . playerBombs .= n-1
      return hasBombs
 
 removePlayer :: MonadState World m => Int -> m ()
@@ -114,11 +122,10 @@ removePlayer i = players %= Map.delete i
 
 movePlayer :: MonadState World m => Int -> Direction -> m (Maybe Coord)
 movePlayer i d =
-  do p  <- use $ player i
-     let c' = p ^. playerCoord ^% moveCoord d
-
-     bs <- uses bombs   $ fmap (view bombCoord)
-     m  <- uses players $ fmap (view playerCoord) . Map.elems
+  do c' <- uses (player i . playerCoord) (moveCoord d)
+     bs <- uses tiles   Map.keys
+     ps <- uses players Map.elems
+     let m = map (view playerCoord) ps
 
      if isValidCoord c' && not (c' `elem` (m ++ bs))
        then do player i . playerCoord .= c'
@@ -131,22 +138,52 @@ moveCoord D (x,y) = (x,y-1)
 moveCoord L (x,y) = (x-1,y)
 moveCoord R (x,y) = (x+1,y)
 
-timeStepWorld :: MonadState World m => Float -> m ([Bomb],[Bomb])
+timeStepWorld :: MonadState World m => Float -> m ([Coord],[Coord])
 timeStepWorld elapsed =
-  do bombs . mapped . bombTimer -= elapsed
+  do tiles . mapped . bomb . bombTimer -= elapsed
      bs <- use bombs
-     let normal    = [ b | b <- bs, b^.bombTimer > 0]
-         detonated = [ bombExploded.~ True 
-                     $ bombTimer   .~ explosionDuration
-                     $ b | b <- bs, b^.bombTimer <= 0, not(b^.bombExploded)]
-         finished =  [ b | b <- bs, b^.bombTimer <= 0, b^.bombExploded ]
-     forM_ detonated $ \b -> incrementBombs $ b^.bombOwner
-     bombs .= normal ++ detonated
-     return (detonated, finished)
+
+     let normal    = [ (i,b) | (i,b) <- bs, b^.bombTimer > 0]
+         detonated = [ (i, bombExploded.~ True 
+                         $ bombTimer   .~ explosionDuration
+                         $ b)
+                     | (i,b) <- bs, b^.bombTimer <= 0, not(b^.bombExploded)]
+         finished =  [ i | (i,b) <- bs, b^.bombTimer <= 0, b^.bombExploded ]
+
+     forM_ normal $ \(i,b) ->
+       tile i .= Just (BombTile b)
+
+     forM_ detonated $ \(i,b) ->
+       do tile i .= Just (BombTile b)
+          incrementBombs $ bombOwner ^$ b
+
+     forM_ finished $ \i ->
+       tile i .= Nothing
+
+     return (map fst detonated, finished)
 
 player :: Int -> Simple Lens World Player
 player i = lens lkup (\w p -> players %~ Map.insert i p $ w)
   where
-  lkup w = case Map.lookup i $ w^.players of
+  lkup w = case Map.lookup i $ players ^$ w of
              Nothing -> error "players"
              Just p  -> p
+
+tile :: Coord -> Simple Lens World (Maybe Tile)
+tile i = tiles . mapping i
+
+bomb :: Setter Tile Tile Bomb Bomb
+bomb = sets aux
+  where
+  aux f (BombTile b) = BombTile (f b)
+  aux _ RockTile     = RockTile
+
+bombs :: Getter World [(Coord,Bomb)]
+bombs = to $ \w -> [(c,b) | (c,BombTile b) <- Map.toList $ tiles ^$ w]
+
+mapping :: Ord k => k -> Simple Lens (Map k v) (Maybe v)
+mapping k = lens (Map.lookup k)
+                 (\m mb -> case mb of
+                             Just v  -> Map.insert k v m
+                             Nothing -> Map.delete k m)
+

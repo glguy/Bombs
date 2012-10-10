@@ -5,7 +5,7 @@ import Data.Binary
 import Simulation
 
 data ServerMessage
-  = SetWorld [(Int,Coord)]
+  = SetWorld World
   | MovePlayer Int Coord
   | AddBomb      Int Coord
   | DetonateBomb Coord

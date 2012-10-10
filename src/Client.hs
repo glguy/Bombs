@@ -3,7 +3,7 @@ module Main where
 import Control.Concurrent
 import Control.Exception
 import Control.Monad (forever)
-import Control.Monad.State (execState)
+import Control.Monad.State (execState, put)
 import Control.Lens
 import Data.Binary
 import Data.Int
@@ -11,13 +11,14 @@ import Data.Map (Map)
 import Graphics.Gloss.Interface.IO.Game
 import Network (connectTo, PortID(PortNumber))
 import System.Exit (exitSuccess)
-import System.IO (hFlush)
+import System.IO (Handle,hFlush)
 import qualified Data.ByteString.Lazy as B
 import qualified Data.Map as Map
 
 import Simulation
 import Messages
 
+main :: IO ()
 main =
   do h <- connectTo "localhost" $ PortNumber 15000
      var <- newMVar startingWorld
@@ -33,8 +34,10 @@ main =
             (event h)
             tick
 
+tick :: Float -> () -> IO ()
 tick _ () = return ()
 
+event :: Handle -> Event -> () -> IO ()
 event h (EventKey (SpecialKey KeyUp   ) Down _ _) () = send h $ Move U
 event h (EventKey (SpecialKey KeyDown ) Down _ _) () = send h $ Move D
 event h (EventKey (SpecialKey KeyLeft ) Down _ _) () = send h $ Move L
@@ -43,20 +46,20 @@ event h (EventKey (Char 'b'           ) Down _ _) () = send h $ DropBomb
 event h _                                         () = return ()
 
 
-updateWorldFromNetwork var msg =
-  modifyMVar_ var $ \w ->
-  return $ flip execState w $
-  case msg of
-    SetWorld xs    -> players .= fmap newPlayer (Map.fromList xs)
-    MovePlayer i c -> addPlayer i c
-    DeletePlayer i -> removePlayer i
-    AddBomb p c    -> placeBomb 0 p c
-    DetonateBomb c -> explodeBomb c
-    ClearExplosion c -> removeBomb c
+updateWorldFromNetwork :: MVar World -> ServerMessage -> IO ()
+updateWorldFromNetwork var msg = modifyMVar_ var $ return . execState
+      (case msg of
+        SetWorld w              -> Control.Monad.State.put w
+        MovePlayer i c          -> addPlayer i c
+        DeletePlayer i          -> removePlayer i
+        AddBomb i c             -> placeBomb i c
+        DetonateBomb c          -> explodeBomb c
+        ClearExplosion c        -> removeBomb c)
 
 translateCoord :: Coord -> Picture -> Picture
 translateCoord (x,y) = translate (fromIntegral (16*x)) (fromIntegral (16*y))
 
+drawWorld :: World -> Picture
 drawWorld w =
   pictures $
     background :
@@ -82,13 +85,13 @@ drawWorld w =
              $ rectangleSolid (fromIntegral (16 * (1 + (maxX - minX))))
                               (fromIntegral (16 * (1 + (maxY - minY))))
 
-drawBombs :: [Bomb] -> Picture
+drawBombs :: [(Coord,Bomb)] -> Picture
 drawBombs bs = pictures
-    [ translateCoord (b^.bombCoord)
+    [ translateCoord c
     $ if b^.bombExploded
-        then drawExplosion (b^.bombCoord) (b^.bombPower)
+        then drawExplosion c (b^.bombPower)
         else drawBomb
-    | b <- bs
+    | (c,b) <- bs
     ]
 
 drawBomb :: Picture
