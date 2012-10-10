@@ -172,7 +172,7 @@ player i = lens lkup (\w p -> players %~ Map.insert i p $ w)
 tile :: Coord -> Simple Lens World (Maybe Tile)
 tile i = tiles . mapping i
 
-bomb :: Setter Tile Tile Bomb Bomb
+bomb :: Simple Setter Tile Bomb
 bomb = sets aux
   where
   aux f (BombTile b) = BombTile (f b)
