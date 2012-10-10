@@ -170,7 +170,7 @@ player i = lens lkup (\w p -> players %~ Map.insert i p $ w)
              Just p  -> p
 
 tile :: Coord -> Simple Lens World (Maybe Tile)
-tile i = tiles . mapping i
+tile i = tiles . at i
 
 bomb :: Simple Setter Tile Bomb
 bomb = sets aux
@@ -180,10 +180,3 @@ bomb = sets aux
 
 bombs :: Getter World [(Coord,Bomb)]
 bombs = to $ \w -> [(c,b) | (c,BombTile b) <- Map.toList $ tiles ^$ w]
-
-mapping :: Ord k => k -> Simple Lens (Map k v) (Maybe v)
-mapping k = lens (Map.lookup k)
-                 (\m mb -> case mb of
-                             Just v  -> Map.insert k v m
-                             Nothing -> Map.delete k m)
-

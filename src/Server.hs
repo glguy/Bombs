@@ -100,4 +100,4 @@ command hs i cmd = execStateT $
                    placeBomb entityId (p^.playerCoord)
                    announce hs $ AddBomb entityId (p^.playerCoord)
 
-who i = playerMapping . mapping i
+who i = playerMapping . at i
