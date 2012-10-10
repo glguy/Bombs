@@ -13,8 +13,14 @@ category:            Game
 build-type:          Simple
 cabal-version:       >=1.8
 
-executable Bombs
-  -- main-is:             
+executable BombsClient
+  main-is:             Client.hs
   -- other-modules:       
-  build-depends:       base, binary, containers, gloss, network, bytestring, time, lens
+  build-depends:       base, binary, containers, gloss, network, bytestring, time, lens, mtl, transformers
+  hs-source-dirs:      src
+
+executable BombsServer
+  main-is:             Server.hs
+  -- other-modules:       
+  build-depends:       base, binary, containers, gloss, network, bytestring, time, lens, mtl, transformers
   hs-source-dirs:      src
