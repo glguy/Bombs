@@ -12,26 +12,57 @@ import Data.Either (partitionEithers)
 bombDuration :: Float
 bombDuration = 3
 
+-- seconds
+explosionDuration :: Float
+explosionDuration = 1
+
+startingPower :: Int
+startingPower = 3
+
+startingBombs :: Int
+startingBombs = 1
+
 type Coord = (Int,Int)
 
 data Bomb = Bomb
   { _bombOwner :: Int
+  , _bombPower :: Int
   , _bombCoord :: Coord
   , _bombTimer :: Float
+  , _bombExploded :: Bool
   }
   deriving (Show)
 
+data Player = Player
+  { _playerCoord :: Coord
+  , _playerBombs :: Int
+  , _playerPower :: Int
+  }
+
 data World = World
-  { _players :: Map Int Coord
+  { _players :: Map Int Player
   , _bombs   :: [Bomb]
   }
 
+data Direction = U | D | L | R
+  deriving (Read, Show, Eq)
+
 makeLenses ''Bomb
+makeLenses ''Player
 makeLenses ''World
 
-data Direction
-  = U | D | L | R
-  deriving (Read, Show, Eq)
+startingWorld :: World
+startingWorld = World
+  { _players = Map.empty
+  , _bombs   = []
+  }
+
+newPlayer :: Coord -> Player
+newPlayer c = Player
+  { _playerCoord = c
+  , _playerBombs = startingBombs
+  , _playerPower = startingPower
+  }
 
 minX,maxX,minY,maxY :: Int
 minX = -4
@@ -46,40 +77,53 @@ isValidCoord (x,y) = (even x || even y)
                   && minX <= x
                   && minY <= y
 
-startingWorld = World
-  { _players = Map.empty
-  , _bombs   = []
-  }
-
-placeBomb :: MonadState World m => Int -> Coord -> m ()
-placeBomb i c = bombs %= (b :)
+placeBomb :: MonadState World m => Int -> Int -> Coord -> m ()
+placeBomb i p c = bombs %= (b :)
   where
   b = Bomb
         { _bombOwner = i
         , _bombCoord = c
         , _bombTimer = bombDuration
+        , _bombPower = p
+        , _bombExploded = False
         }
 
+explodeBomb :: MonadState World m => Coord -> m ()
+explodeBomb c = bombs %= fmap f
+  where f b | b^.bombCoord == c = bombExploded .~ True $ b
+            | otherwise         = b
+
 removeBomb :: MonadState World m => Coord -> m ()
-removeBomb c = bombs %= \xs -> [b | b <- xs, b^.bombCoord /= c]
+removeBomb c = bombs %= \bs -> [b | b <- bs, b^.bombCoord /= c]
 
-addEntity :: MonadState World m => Int -> Coord -> m ()
-addEntity i c = players %= Map.insert i c
+addPlayer :: MonadState World m => Int -> Coord -> m ()
+addPlayer i c = player i .= newPlayer c
 
-removeEntity :: MonadState World m => Int -> m ()
-removeEntity i = players %= Map.delete i
+incrementBombs :: MonadState World m => Int -> m ()
+incrementBombs i = player i . playerBombs += 1
 
-moveEntity :: MonadState World m => Int -> Direction -> m (Maybe Coord)
-moveEntity i d =
-  do m <- use players
-     case Map.lookup i m of
-       Just c
-         | isValidCoord c' && not (c' `elem` Map.elems m) ->
-            do players %= Map.insert i c'
+decrementBomb :: MonadState World m => Int -> m Bool
+decrementBomb i =
+  do p <- use $ player i
+     let hasBombs = p ^. playerBombs > 0
+     when hasBombs $ player i . playerBombs -= 1
+     return hasBombs
+
+removePlayer :: MonadState World m => Int -> m ()
+removePlayer i = players %= Map.delete i
+
+movePlayer :: MonadState World m => Int -> Direction -> m (Maybe Coord)
+movePlayer i d =
+  do p  <- use $ player i
+     let c' = p ^. playerCoord ^% moveCoord d
+
+     bs <- uses bombs   $ fmap (view bombCoord)
+     m  <- uses players $ fmap (view playerCoord) . Map.elems
+
+     if isValidCoord c' && not (c' `elem` (m ++ bs))
+       then do player i . playerCoord .= c'
                return (Just c')
-         where
-         c' = moveCoord d c
-       _ -> return Nothing
+       else return Nothing
 
 moveCoord :: Direction -> Coord -> Coord
 moveCoord U (x,y) = (x,y+1)
@@ -87,16 +131,22 @@ moveCoord D (x,y) = (x,y-1)
 moveCoord L (x,y) = (x-1,y)
 moveCoord R (x,y) = (x+1,y)
 
-timeStepWorld :: Float -> State World [Bomb]
+timeStepWorld :: MonadState World m => Float -> m ([Bomb],[Bomb])
 timeStepWorld elapsed =
-  do bs <- use bombs
-     let (bs', exploded) = partitionEithers $ map updateBomb bs
-     bombs .= bs'
-     return exploded
-  where
+  do bombs . mapped . bombTimer -= elapsed
+     bs <- use bombs
+     let normal    = [ b | b <- bs, b^.bombTimer > 0]
+         detonated = [ bombExploded.~ True 
+                     $ bombTimer   .~ explosionDuration
+                     $ b | b <- bs, b^.bombTimer <= 0, not(b^.bombExploded)]
+         finished =  [ b | b <- bs, b^.bombTimer <= 0, b^.bombExploded ]
+     forM_ detonated $ \b -> incrementBombs $ b^.bombOwner
+     bombs .= normal ++ detonated
+     return (detonated, finished)
 
-  updateBomb b
-    | timer' > 0 = Left (bombTimer .~ timer' $ b)
-    | otherwise = Right b
-    where
-    timer' = b^.bombTimer - elapsed
+player :: Int -> Simple Lens World Player
+player i = lens lkup (\w p -> players %~ Map.insert i p $ w)
+  where
+  lkup w = case Map.lookup i $ w^.players of
+             Nothing -> error "players"
+             Just p  -> p

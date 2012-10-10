@@ -10,6 +10,7 @@ import Control.Concurrent (forkIO, threadDelay, ThreadId,
                            Chan, newChan, readChan, writeChan)
 import Control.Exception (SomeException, handle, bracket_)
 import Control.Monad (forM_, forever)
+import Control.Monad.IO.Class (MonadIO(liftIO))
 import Data.Binary (Binary, encode, decode)
 import Data.Foldable (for_)
 import Data.Int (Int64)
@@ -81,8 +82,8 @@ clientSocketLoop i h events =
                writeChan events $ ClientEvent i $ decode bs
 
 -- | Send a command to a collection of clients
-announce :: Binary c => Handles ConnectionId -> c -> IO ()
-announce hs msg =
+announce :: (MonadIO m, Binary c) => Handles ConnectionId -> c -> m ()
+announce hs msg = liftIO $
   do let bs = encode msg
          n  = encode (B.length bs)
      forM_ (listHandles hs) $ \(_name,h) ->
@@ -93,12 +94,12 @@ announce hs msg =
 
 -- | Send a command to a single client identified by id.
 announceOne ::
-  Binary c =>
+  (MonadIO m, Binary c) =>
   Handles ConnectionId ->
   ConnectionId ->
   c ->
-  IO ()
-announceOne hs i msg =
+  m ()
+announceOne hs i msg = liftIO $
   do let bs = encode msg
          n  = encode (B.length bs)
      for_ (lookupHandle i hs) $ \h ->

@@ -1,9 +1,10 @@
 {-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Main where
 
 import Control.Lens
-import Control.Monad.State (execState, runState, execStateT)
-import Control.Monad.IO.Class
+import Control.Monad (when)
+import Control.Monad.State (execState, runState, execStateT, MonadState)
 import Data.Foldable
 import Data.List
 import Data.Map (Map)
@@ -41,13 +42,12 @@ initialState = ServerState
 
 
 tick :: Handles ConnectionId -> Float -> ServerState -> IO ServerState
-tick hs elapsed s =
-  do forM_ exploded $ \b ->
-       announce hs $ DetonateBomb $ b^.bombCoord
-     return s { _serverWorld = w' }
-  where
-  (exploded,w') = flip runState (_serverWorld s)
-                $ timeStepWorld elapsed
+tick hs elapsed = execStateT $
+  do (detonated,finished) <- zoom serverWorld $ timeStepWorld elapsed
+     forM_ detonated $ \b ->
+         announce hs $ DetonateBomb $ bombCoord ^$ b
+     forM_ finished $ \b ->
+         announce hs $ ClearExplosion $ bombCoord ^$ b
 
 connect ::
   Handles ConnectionId ->
@@ -59,9 +59,9 @@ connect hs i = execStateT $
      mapping <- use playerMapping
      let entityId = head $ [0..] \\ Map.elems mapping
      playerMapping %= Map.insert i entityId
-     zoom serverWorld $ addEntity entityId (0,0)
-     liftIO $ announceOne hs i $ SetWorld $ Map.toList ps
-     liftIO $ announce    hs   $ MoveEntity entityId (0,0)
+     zoom serverWorld $ addPlayer entityId (0,0)
+     announceOne hs i $ SetWorld $ Map.toList $ fmap (view playerCoord) ps
+     announce    hs   $ MovePlayer entityId (0,0)
 
 disconnect ::
   Handles ConnectionId ->
@@ -69,9 +69,9 @@ disconnect ::
   ServerState ->
   IO ServerState
 disconnect hs i = execStateT $
-  do Just entityId <- uses playerMapping (Map.lookup i)
-     liftIO $ announce hs $ DeleteEntity entityId
-     zoom serverWorld $ removeEntity entityId
+  do entityId <- who i
+     announce hs $ DeletePlayer entityId
+     zoom serverWorld $ removePlayer entityId
      playerMapping %= Map.delete i
 
 command ::
@@ -81,14 +81,20 @@ command ::
   ServerState ->
   IO ServerState
 command hs i cmd = execStateT $
-  do Just entityId    <- uses playerMapping         (Map.lookup i       )
-     Just playerCoord <- uses (serverWorld.players) (Map.lookup entityId)
+  do entityId   <- who i
+     p		<- use $ serverWorld.player entityId
      zoom serverWorld $
        case cmd of
          Move dir ->
-           do mbCoord <- moveEntity entityId dir
+           do mbCoord <- movePlayer entityId dir
               for_ mbCoord $ \coord ->
-                liftIO $ announce hs $ MoveEntity entityId coord
+                announce hs $ MovePlayer entityId coord
          DropBomb ->
-           do placeBomb entityId playerCoord
-              liftIO $ announce hs $ AddBomb playerCoord
+           do success <- decrementBomb entityId
+              when success $
+                do placeBomb entityId (p^.playerPower) (p^.playerCoord)
+                   announce hs $ AddBomb (p^.playerPower) (p^.playerCoord)
+
+who :: MonadState ServerState m => ConnectionId -> m Int
+who i = do Just entityId <- uses playerMapping $ Map.lookup i
+           return entityId 

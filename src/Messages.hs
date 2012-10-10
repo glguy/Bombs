@@ -6,10 +6,11 @@ import Simulation
 
 data ServerMessage
   = SetWorld [(Int,Coord)]
-  | MoveEntity Int Coord
-  | AddBomb      Coord
+  | MovePlayer Int Coord
+  | AddBomb      Int Coord
   | DetonateBomb Coord
-  | DeleteEntity Int
+  | ClearExplosion Coord
+  | DeletePlayer Int
   deriving (Read, Show)
 
 data ClientMessage

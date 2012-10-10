@@ -47,43 +47,89 @@ updateWorldFromNetwork var msg =
   modifyMVar_ var $ \w ->
   return $ flip execState w $
   case msg of
-    SetWorld xs    -> players .= Map.fromList xs
-    MoveEntity i c -> addEntity i c
-    DeleteEntity i -> removeEntity i
-    AddBomb c      -> placeBomb 0 c
-    DetonateBomb c -> removeBomb c
+    SetWorld xs    -> players .= fmap newPlayer (Map.fromList xs)
+    MovePlayer i c -> addPlayer i c
+    DeletePlayer i -> removePlayer i
+    AddBomb p c    -> placeBomb 0 p c
+    DetonateBomb c -> explodeBomb c
+    ClearExplosion c -> removeBomb c
 
-translateI x y = translate (fromIntegral (16*x)) (fromIntegral (16*y))
+translateCoord :: Coord -> Picture -> Picture
+translateCoord (x,y) = translate (fromIntegral (16*x)) (fromIntegral (16*y))
 
 drawWorld w =
   pictures $
     background :
-    [ translateI  x y
+    drawBombs (w^.bombs) :
+    [ translateCoord (p^.playerCoord)
     $ pictures
-        [ color black $ circleSolid 8
-        , translate (-4) (-4) $ scale 0.1 0.1 $ color white $ text $ show $ ceiling $ b^.bombTimer
-        ]
-    | b <- w^.bombs
-    , let (x,y) = b^.bombCoord ]
-    ++
-    [ translateI x y
-    $ pictures
-        [ color red $ rectangleSolid 16 16
+        [ color red $ rectangleSolid 14 14
         , translate (-4) (-4) $ scale 0.1 0.1 $ color white $ text $ show i
         ]
-    | (i,(x,y)) <- Map.toList $ w^.players]
+    | (i,p) <- Map.toList $ players ^$ w
+    ]
     ++
-    [ translateI x y
+    [ translateCoord c
     $ color green $ rectangleSolid 14 14
     | x <- [minX..maxX]
     , y <- [minY..maxY]
-    , not (isValidCoord (x,y))
+    , let c = (x,y)
+    , not (isValidCoord c)
     ]
 
   where
   background = color (greyN 0.5)
              $ rectangleSolid (fromIntegral (16 * (1 + (maxX - minX))))
                               (fromIntegral (16 * (1 + (maxY - minY))))
+
+drawBombs :: [Bomb] -> Picture
+drawBombs bs = pictures
+    [ translateCoord (b^.bombCoord)
+    $ if b^.bombExploded
+        then drawExplosion (b^.bombCoord) (b^.bombPower)
+        else drawBomb
+    | b <- bs
+    ]
+
+drawBomb :: Picture
+drawBomb = color black $ circleSolid 8
+
+drawExplosion :: Coord -> Int -> Picture
+drawExplosion (x,y) power
+  = color orange
+  $ pictures
+  $ drawExplosionCenter :
+    [ rotate angle
+    $ translateCoord (i,0)
+    $ drawExplosionCell
+    | i     <- [1..power]
+    , angle <- [0,90,180,270]
+    , onBoardTest i angle
+    ]
+  where
+  -- This function will have to be updated to avoid
+  -- blocks on the board, not just borders and pillars
+  onBoardTest i   0 = even y && x+i <= maxX
+  onBoardTest i  90 = even x && y-i >= minY
+  onBoardTest i 180 = even y && x-i >= minX
+  onBoardTest i 270 = even x && y+i <= maxY
+
+drawExplosionCell :: Picture
+drawExplosionCell
+  = color orange
+  $ pictures
+     [ translate (fromIntegral (4*i)) 0
+     $ line [(-8,8),(-4,0),(-8,-8)]
+     | i <- [0 .. 3 :: Int]
+     ]
+
+drawExplosionCenter :: Picture
+drawExplosionCenter =
+  line [(0,8),(-k,k),(-8,0)
+       ,(-k,-k),(0,-8),(k,-k)
+       ,(8,0),(k,k),(0,8)]
+  where
+  k = 16/3
 
 --------------------------
 -- Client framework code
