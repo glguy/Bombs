@@ -16,5 +16,5 @@ cabal-version:       >=1.8
 executable Bombs
   -- main-is:             
   -- other-modules:       
-  build-depends:       base ==4.5.*, binary ==0.5.*, containers ==0.4.*, gloss ==1.7.*, network ==2.3.*, bytestring ==0.9.*, time ==1.4.*
+  build-depends:       base, binary, containers, gloss, network, bytestring, time, lens
   hs-source-dirs:      src

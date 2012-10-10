@@ -1,5 +1,9 @@
+{-# LANGUAGE TemplateHaskell #-}
+{-# LANGUAGE FlexibleContexts #-}
 module Simulation where
 
+import Control.Lens
+import Control.Monad.State
 import qualified Data.Map as Map
 import Data.Map (Map)
 import Data.Either (partitionEithers)
@@ -11,15 +15,19 @@ bombDuration = 3
 type Coord = (Int,Int)
 
 data Bomb = Bomb
-  { bombOwner :: Int
-  , bombCoord :: Coord
-  , bombTimer :: Float
+  { _bombOwner :: Int
+  , _bombCoord :: Coord
+  , _bombTimer :: Float
   }
+  deriving (Show)
 
 data World = World
-  { players :: Map Int Coord
-  , bombs   :: [Bomb]
+  { _players :: Map Int Coord
+  , _bombs   :: [Bomb]
   }
+
+makeLenses ''Bomb
+makeLenses ''World
 
 data Direction
   = U | D | L | R
@@ -38,37 +46,40 @@ isValidCoord (x,y) = (even x || even y)
                   && minX <= x
                   && minY <= y
 
-startingWorld = World Map.empty []
+startingWorld = World
+  { _players = Map.empty
+  , _bombs   = []
+  }
 
-placeBomb :: Int -> Coord -> World -> World
-placeBomb i c w = w { bombs = b : bombs w }
+placeBomb :: MonadState World m => Int -> Coord -> m ()
+placeBomb i c = bombs %= (b :)
   where
   b = Bomb
-        { bombOwner = i
-        , bombCoord = c
-        , bombTimer = bombDuration
+        { _bombOwner = i
+        , _bombCoord = c
+        , _bombTimer = bombDuration
         }
 
-removeBomb :: Coord -> World -> World
-removeBomb c w = w { bombs = [b | b <- bombs w, bombCoord b /= c] }
+removeBomb :: MonadState World m => Coord -> m ()
+removeBomb c = bombs %= \xs -> [b | b <- xs, b^.bombCoord /= c]
 
-addEntity :: Int -> Coord -> World -> World
-addEntity i c w = w { players = Map.insert i c $ players w }
+addEntity :: MonadState World m => Int -> Coord -> m ()
+addEntity i c = players %= Map.insert i c
 
-removeEntity :: Int -> World -> World
-removeEntity i w = w { players = Map.delete i $ players w }
+removeEntity :: MonadState World m => Int -> m ()
+removeEntity i = players %= Map.delete i
 
-moveEntity :: Int -> Direction -> World -> Maybe (World, Coord)
-moveEntity i d w =
-  case Map.lookup i m of
-    Just c
-      | isValidCoord c' && not (c' `elem` Map.elems m) ->
-         Just (w { players = Map.insert i c' m}, c')
-      where
-      c' = moveCoord d c
-    _ -> Nothing
-  where
-  m = players w
+moveEntity :: MonadState World m => Int -> Direction -> m (Maybe Coord)
+moveEntity i d =
+  do m <- use players
+     case Map.lookup i m of
+       Just c
+         | isValidCoord c' && not (c' `elem` Map.elems m) ->
+            do players %= Map.insert i c'
+               return (Just c')
+         where
+         c' = moveCoord d c
+       _ -> return Nothing
 
 moveCoord :: Direction -> Coord -> Coord
 moveCoord U (x,y) = (x,y+1)
@@ -76,13 +87,16 @@ moveCoord D (x,y) = (x,y-1)
 moveCoord L (x,y) = (x-1,y)
 moveCoord R (x,y) = (x+1,y)
 
-timeStepWorld :: Float -> World -> (World, [Bomb])
-timeStepWorld elapsed w = (w { bombs = bombs' }, exploded)
+timeStepWorld :: Float -> State World [Bomb]
+timeStepWorld elapsed =
+  do bs <- use bombs
+     let (bs', exploded) = partitionEithers $ map updateBomb bs
+     bombs .= bs'
+     return exploded
   where
-  (bombs', exploded) = partitionEithers $ map updateBomb $ bombs w
 
   updateBomb b
-    | timer' > 0 = Left b { bombTimer = timer' }
+    | timer' > 0 = Left (bombTimer .~ timer' $ b)
     | otherwise = Right b
     where
-    timer' = bombTimer b - elapsed
+    timer' = b^.bombTimer - elapsed

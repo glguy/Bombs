@@ -3,6 +3,8 @@ module Main where
 import Control.Concurrent
 import Control.Exception
 import Control.Monad (forever)
+import Control.Monad.State (execState)
+import Control.Lens
 import Data.Binary
 import Data.Int
 import Data.Map (Map)
@@ -43,12 +45,13 @@ event h _                                         () = return ()
 
 updateWorldFromNetwork var msg =
   modifyMVar_ var $ \w ->
+  return $ flip execState w $
   case msg of
-    SetWorld xs    -> return $ w { players = Map.fromList xs }
-    MoveEntity i c -> return $ addEntity i c w
-    DeleteEntity i -> return $ removeEntity i w
-    AddBomb c      -> return $ placeBomb 0 c w
-    DetonateBomb c -> return $ removeBomb c w
+    SetWorld xs    -> players .= Map.fromList xs
+    MoveEntity i c -> addEntity i c
+    DeleteEntity i -> removeEntity i
+    AddBomb c      -> placeBomb 0 c
+    DetonateBomb c -> removeBomb c
 
 translateI x y = translate (fromIntegral (16*x)) (fromIntegral (16*y))
 
@@ -58,17 +61,17 @@ drawWorld w =
     [ translateI  x y
     $ pictures
         [ color black $ circleSolid 8
-        , translate (-4) (-4) $ scale 0.1 0.1 $ color white $ text $ show $ ceiling $ bombTimer b
+        , translate (-4) (-4) $ scale 0.1 0.1 $ color white $ text $ show $ ceiling $ b^.bombTimer
         ]
-    | b <- bombs w
-    , let (x,y) = bombCoord b ]
+    | b <- w^.bombs
+    , let (x,y) = b^.bombCoord ]
     ++
     [ translateI x y
     $ pictures
         [ color red $ rectangleSolid 16 16
         , translate (-4) (-4) $ scale 0.1 0.1 $ color white $ text $ show i
         ]
-    | (i,(x,y)) <- Map.toList $ players w]
+    | (i,(x,y)) <- Map.toList $ w^.players]
     ++
     [ translateI x y
     $ color green $ rectangleSolid 14 14

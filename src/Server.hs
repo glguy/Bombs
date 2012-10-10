@@ -1,6 +1,10 @@
+{-# LANGUAGE TemplateHaskell #-}
 module Main where
 
-import Control.Monad (forM_)
+import Control.Lens
+import Control.Monad.State (execState, runState, execStateT)
+import Control.Monad.IO.Class
+import Data.Foldable
 import Data.List
 import Data.Map (Map)
 import Network(PortID(PortNumber))
@@ -9,6 +13,13 @@ import qualified Data.Map as Map
 import Framework.Server (NetworkServer(..), serverMain, Handles, ConnectionId, announce, announceOne)
 import Messages
 import Simulation
+
+data ServerState = ServerState
+  { _serverWorld         :: World
+  , _playerMapping       :: Map ConnectionId Int
+  }
+
+makeLenses ''ServerState
 
 main = serverMain myNetworkServer initialState
 
@@ -21,51 +32,47 @@ myNetworkServer = NetworkServer
   , onCommand           = command
   }
 
-data ServerState = ServerState
-  { serverWorld         :: World
-  , playerMapping       :: Map ConnectionId Int
+
+initialState :: ServerState
+initialState = ServerState
+  { _serverWorld	= startingWorld
+  , _playerMapping	= Map.empty
   }
 
-initialState = ServerState
-  { serverWorld = startingWorld
-  , playerMapping = Map.empty
-  }
 
 tick :: Handles ConnectionId -> Float -> ServerState -> IO ServerState
 tick hs elapsed s =
   do forM_ exploded $ \b ->
-       announce hs $ DetonateBomb $ bombCoord b
-     return s { serverWorld = w' }
+       announce hs $ DetonateBomb $ b^.bombCoord
+     return s { _serverWorld = w' }
   where
-  (w',exploded) = timeStepWorld elapsed $ serverWorld s
+  (exploded,w') = flip runState (_serverWorld s)
+                $ timeStepWorld elapsed
 
 connect ::
   Handles ConnectionId ->
   ConnectionId ->
   ServerState ->
   IO ServerState
-connect hs i s =
-  do announceOne hs i $ SetWorld $ Map.toList $ players w
-     announce    hs   $ MoveEntity entityId (0,0)
-     return $ s { playerMapping = Map.insert i entityId (playerMapping s)
-                , serverWorld   = w
-                }
-  where
-  entityId = head $ [0..] \\ Map.elems (playerMapping s)
-  w = addEntity entityId (0,0) (serverWorld s)
+connect hs i = execStateT $
+  do ps      <- use (serverWorld.players)
+     mapping <- use playerMapping
+     let entityId = head $ [0..] \\ Map.elems mapping
+     playerMapping %= Map.insert i entityId
+     zoom serverWorld $ addEntity entityId (0,0)
+     liftIO $ announceOne hs i $ SetWorld $ Map.toList ps
+     liftIO $ announce    hs   $ MoveEntity entityId (0,0)
 
 disconnect ::
   Handles ConnectionId ->
   ConnectionId ->
   ServerState ->
   IO ServerState
-disconnect hs i s = 
-  do announce hs $ DeleteEntity entityId
-     return s { playerMapping = Map.delete i (playerMapping s)
-              , serverWorld   = removeEntity entityId (serverWorld s)
-              }
-  where
-  Just entityId = Map.lookup i (playerMapping s)
+disconnect hs i = execStateT $
+  do Just entityId <- uses playerMapping (Map.lookup i)
+     liftIO $ announce hs $ DeleteEntity entityId
+     zoom serverWorld $ removeEntity entityId
+     playerMapping %= Map.delete i
 
 command ::
   Handles ConnectionId ->
@@ -73,20 +80,15 @@ command ::
   ClientMessage ->
   ServerState ->
   IO ServerState
-command hs i c s =
-  case c of
-    Move dir ->
-      case moveEntity entityId dir (serverWorld s) of
-        Nothing         -> return s
-        Just (w',coord) ->
-          do announce hs $ MoveEntity entityId coord
-             return s { serverWorld = w' }
-
-    DropBomb ->
-      do let w' = placeBomb entityId playerCoord w
-         announce hs $ AddBomb playerCoord
-         return s { serverWorld = w' }
-  where
-  w = serverWorld s
-  Just entityId = Map.lookup i (playerMapping s)
-  Just playerCoord = Map.lookup entityId (players w)
+command hs i cmd = execStateT $
+  do Just entityId    <- uses playerMapping         (Map.lookup i       )
+     Just playerCoord <- uses (serverWorld.players) (Map.lookup entityId)
+     zoom serverWorld $
+       case cmd of
+         Move dir ->
+           do mbCoord <- moveEntity entityId dir
+              for_ mbCoord $ \coord ->
+                liftIO $ announce hs $ MoveEntity entityId coord
+         DropBomb ->
+           do placeBomb entityId playerCoord
+              liftIO $ announce hs $ AddBomb playerCoord
