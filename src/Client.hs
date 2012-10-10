@@ -17,6 +17,7 @@ import qualified Data.Map as Map
 
 import Simulation
 import Messages
+import Framework.Packet
 
 main :: IO ()
 main =
@@ -134,27 +135,11 @@ drawExplosionCenter =
   where
   k = 16/3
 
---------------------------
--- Client framework code
---------------------------
-
-
--- | Send a command to a single client identified by id.
-send h msg =
-  handle ignoreExceptions $
-  do let bs = encode msg
-         n  = encode (B.length bs)
-     B.hPutStr h n
-     B.hPutStr h bs
-     hFlush h
+send :: Handle -> ClientMessage -> IO ()
+send h msg = handle ignoreExceptions $ hPutPacket h $ mkPacket msg
 
 ignoreExceptions :: SomeException -> IO ()
 ignoreExceptions _ = return ()
 
-recv h var =
-  forever (do nBs <- B.hGet h 8
-              let n = decode nBs :: Int64
-              bs <- B.hGet h (fromIntegral n)
-              updateWorldFromNetwork var $ decode bs)
-
-
+recv :: Handle -> MVar World -> IO a
+recv h var = forever $ updateWorldFromNetwork var =<< hGetPacketed h

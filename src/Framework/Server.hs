@@ -21,6 +21,7 @@ import System.IO
 import qualified Data.ByteString.Lazy as B
 
 import Framework.Handles
+import Framework.Packet
 
 data NetworkServer c w = NetworkServer
   { serverPort   :: PortID
@@ -76,21 +77,16 @@ clientSocketLoop ::
   ConnectionId -> Handle -> Chan (ServerEvent c) -> IO ()
 clientSocketLoop i h events =
   handle ignoreExceptions $
-  forever $ do nBs <- B.hGet h 8
-               let n = decode nBs :: Int64
-               bs <- B.hGet h (fromIntegral n)
-               writeChan events $ ClientEvent i $ decode bs
+  forever $ do msg <- hGetPacketed h
+               writeChan events $ ClientEvent i msg
 
 -- | Send a command to a collection of clients
 announce :: (MonadIO m, Binary c) => Handles ConnectionId -> c -> m ()
 announce hs msg = liftIO $
-  do let bs = encode msg
-         n  = encode (B.length bs)
+  do let p = mkPacket msg
      forM_ (listHandles hs) $ \(_name,h) ->
        handle ignoreExceptions $
-       do B.hPutStr h n
-          B.hPutStr h bs
-          hFlush h
+       hPutPacket h p
 
 -- | Send a command to a single client identified by id.
 announceOne ::
@@ -100,13 +96,10 @@ announceOne ::
   c ->
   m ()
 announceOne hs i msg = liftIO $
-  do let bs = encode msg
-         n  = encode (B.length bs)
+  do let p = mkPacket msg
      for_ (lookupHandle i hs) $ \h ->
        handle ignoreExceptions $
-         do B.hPutStr h n
-            B.hPutStr h bs
-            hFlush h
+       hPutPacket h p
 
 ignoreExceptions :: SomeException -> IO ()
 ignoreExceptions _ = return ()
