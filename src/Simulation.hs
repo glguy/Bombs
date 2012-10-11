@@ -4,6 +4,7 @@ module Simulation where
 
 import Control.Lens
 import Control.Monad.State
+import Control.Monad (forM)
 import qualified Data.Map as Map
 import Data.Map (Map)
 import Data.Either (partitionEithers)
@@ -36,6 +37,7 @@ data Player = Player
   { _playerCoord :: Coord
   , _playerBombs :: Int
   , _playerPower :: Int
+  , _playerAlive :: Bool
   }
   deriving (Show, Read)
 
@@ -68,6 +70,7 @@ newPlayer c = Player
   { _playerCoord = c
   , _playerBombs = startingBombs
   , _playerPower = startingPower
+  , _playerAlive = True
   }
 
 minX,maxX,minY,maxY :: Int
@@ -100,6 +103,24 @@ newBomb i =
 
 explodeBomb :: MonadState World m => Coord -> m ()
 explodeBomb c = tile c . mapped . bomb . bombExploded .= True
+
+affectedSearch ::
+  MonadState World m =>
+  Direction {- ^ search direction -} ->
+  Coord {- ^ current coord -} ->
+  Int {- ^ remaining power -} ->
+  m [Coord]
+affectedSearch direction = aux
+  where
+  aux coord power
+    | power <= 0 = return []
+    | not (isValidCoord coord) = return []
+    | otherwise =
+      do t <- use $ tile coord
+         case t of
+           Just _ -> return [coord]
+           Nothing -> liftM (coord:) (aux (moveCoord direction coord) (power-1))
+        
 
 removeBomb :: MonadState World m => Coord -> m ()
 removeBomb c = tile c .= Nothing
@@ -138,7 +159,7 @@ moveCoord D (x,y) = (x,y-1)
 moveCoord L (x,y) = (x-1,y)
 moveCoord R (x,y) = (x+1,y)
 
-timeStepWorld :: MonadState World m => Float -> m ([Coord],[Coord])
+timeStepWorld :: MonadState World m => Float -> m ([Coord],[Coord],[Coord])
 timeStepWorld elapsed =
   do tiles . mapped . bomb . bombTimer -= elapsed
      bs <- use bombs
@@ -153,14 +174,17 @@ timeStepWorld elapsed =
      forM_ normal $ \(i,b) ->
        tile i .= Just (BombTile b)
 
-     forM_ detonated $ \(i,b) ->
+     affected <- forM detonated $ \(i,b) ->
        do tile i .= Just (BombTile b)
           incrementBombs $ bombOwner ^$ b
+          affecteds <- forM [L,D,R,U] $ \dir ->
+             affectedSearch dir (moveCoord dir i) (b^.bombPower)
+          return $ i : concat affecteds
 
      forM_ finished $ \i ->
        tile i .= Nothing
 
-     return (map fst detonated, finished)
+     return (map fst detonated, finished, concat affected)
 
 -- | We are careful to only refer to players that exist
 player :: Int -> Simple Lens World Player

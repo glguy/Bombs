@@ -54,7 +54,7 @@ updateWorldFromNetwork var msg = modifyMVar_ var $ return . execState
         MovePlayer i c          -> addPlayer i c
         DeletePlayer i          -> removePlayer i
         AddBomb i c             -> placeBomb i c
-        DetonateBomb c          -> explodeBomb c
+        DetonateBomb c          -> explodeBomb c >> return ()
         ClearExplosion c        -> removeBomb c)
 
 translateCoord :: Coord -> Picture -> Picture

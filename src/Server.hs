@@ -5,7 +5,7 @@ module Main where
 import Control.Lens
 import Control.Monad (when)
 import Control.Monad.State (execState, runState, execStateT, MonadState)
-import Control.Monad.IO.Class (MonadIO)
+import Control.Monad.IO.Class (MonadIO, liftIO)
 import Data.Foldable
 import Data.List
 import Data.Map (Map)
@@ -44,9 +44,10 @@ initialState = ServerState
 
 tick :: Handles ConnectionId -> Float -> ServerState -> IO ServerState
 tick hs elapsed = execStateT $
-  do (detonated,finished) <- zoom serverWorld $ timeStepWorld elapsed
+  do (detonated,finished,burned) <- zoom serverWorld $ timeStepWorld elapsed
      traverse_ (announce hs . DetonateBomb  ) detonated
      traverse_ (announce hs . ClearExplosion) finished
+     liftIO $ print burned
 
 connect ::
   Handles ConnectionId ->
