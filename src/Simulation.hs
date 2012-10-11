@@ -102,7 +102,7 @@ explodeBomb :: MonadState World m => Coord -> m ()
 explodeBomb c = tile c . mapped . bomb . bombExploded .= True
 
 removeBomb :: MonadState World m => Coord -> m ()
-removeBomb c = tiles %= Map.delete c
+removeBomb c = tile c .= Nothing
 
 addPlayer :: MonadState World m => Int -> Coord -> m ()
 addPlayer i c = player i .= newPlayer c
@@ -118,7 +118,7 @@ decrementBomb i =
      return hasBombs
 
 removePlayer :: MonadState World m => Int -> m ()
-removePlayer i = players %= Map.delete i
+removePlayer i = players . at i .= Nothing
 
 movePlayer :: MonadState World m => Int -> Direction -> m (Maybe Coord)
 movePlayer i d =
@@ -162,12 +162,9 @@ timeStepWorld elapsed =
 
      return (map fst detonated, finished)
 
+-- | We are careful to only refer to players that exist
 player :: Int -> Simple Lens World Player
-player i = lens lkup (\w p -> players %~ Map.insert i p $ w)
-  where
-  lkup w = case Map.lookup i $ players ^$ w of
-             Nothing -> error "players"
-             Just p  -> p
+player i = players . at i . lens (\(Just x) -> x) (\m x -> Just x)
 
 tile :: Coord -> Simple Lens World (Maybe Tile)
 tile i = tiles . at i
